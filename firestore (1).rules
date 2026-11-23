@@ -1,0 +1,25 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isApp() {
+      return request.auth != null;
+    }
+    function isAppCollection(col) {
+      return col in ['players', 'matches', 'candidates', 'aportaciones', 'debts', 'photos'];
+    }
+
+    // Solo la app (sesión anónima de Firebase) puede leer y escribir,
+    // y solo en las colecciones que usa.
+    match /{col}/{id} {
+      allow read, delete: if isApp() && isAppCollection(col);
+      allow create, update: if isApp() && isAppCollection(col)
+        && request.resource.data.size() < 60;
+    }
+
+    // Todo lo demás, cerrado.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
