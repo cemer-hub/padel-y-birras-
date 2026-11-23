@@ -574,30 +574,36 @@ function jKeep(){
   if(J.mode==="pairs")J.pairs=J.pairs.map((p,i)=>[$("#jp"+i+"a")?.value||"",$("#jp"+i+"b")?.value||""]);
 }
 function drawJornada(){
-  let h=`<h2>🎲 La Callejada</h2><p class="muted" style="margin-top:-6px">Dinos quién juega y la app monta el partido.</p>
+  let h=`<h2>🎲 La Callejada</h2><p class="muted" style="margin-top:-6px">Dinos quién juega y la app monta los partidos: uno por cada 4 jugadores.</p>
   <div class="grid2"><div><label>Día</label><input type="date" id="jDate" value="${esc(J.date)}"></div><div><label>Hora</label><input type="time" id="jTime" value="${esc(J.time)}"></div></div>
   <label>Dónde</label><input id="jPlace" value="${esc(J.place)}" placeholder="Club, pista…">
   <label>¿Cómo van las parejas?</label>
   <div class="seg"><button class="${J.mode==="pairs"?"on":""}" onclick="jKeep();J.mode='pairs';J.plan=null;drawJornada()">Ya las tenemos</button><button class="${J.mode==="draw"?"on":""}" onclick="jKeep();J.mode='draw';J.plan=null;drawJornada()">Que las sortee la app</button></div>`;
   if(J.mode==="pairs"){
-    h+=J.pairs.map((p,i)=>`<div class="pairbox"><div class="row" style="justify-content:space-between"><span class="disp">Pareja ${i===0?"A":"B"}</span></div><div class="grid2" style="margin-top:6px"><select id="jp${i}a">${playerOpts(p[0])}</select><select id="jp${i}b">${playerOpts(p[1])}</select></div></div>`).join("");
+    const nM=J.pairs.length/2;
+    for(let k=0;k<nM;k++){
+      h+=`<div class="pairbox" style="border-color:var(--ink)"><div class="row" style="justify-content:space-between"><span class="disp">🎾 Partido ${k+1}</span>${nM>1?`<button class="btn sm ghost" onclick="jKeep();J.pairs.splice(${2*k},2);J.plan=null;drawJornada()">✕ Quitar</button>`:""}</div>`;
+      for(const i of [2*k,2*k+1]){const p=J.pairs[i];h+=`<div style="margin-top:8px"><span class="muted" style="font-weight:800">Pareja ${i%2===0?"A":"B"}</span><div class="grid2" style="margin-top:4px"><select id="jp${i}a">${playerOpts(p[0])}</select><select id="jp${i}b">${playerOpts(p[1])}</select></div></div>`}
+      h+=`</div>`;
+    }
+    if(nM<4)h+=`<button class="btn sm ghost" style="margin-top:8px" onclick="jKeep();J.pairs.push(['',''],['','']);J.plan=null;drawJornada()">+ Añadir otro partido</button>`;
   }else{
     const act=S.players.filter(p=>!p.retired).sort((a,b)=>a.name.localeCompare(b.name));
-    h+=`<label>¿Quién puede jugar? (${J.sel.length})</label><p class="muted" style="margin:0 0 6px">Si marcas más de 4, la app elige a 4: primero los que menos han jugado este mes.</p><div class="emojis">${act.map(p=>`<button type="button" class="${J.sel.includes(p.id)?"on":""}" style="font-size:13px;font-weight:700" onclick="jKeep();jToggle('${p.id}')">${esc(p.emoji+" "+p.name)}</button>`).join("")}</div>
+    h+=`<label>¿Quién puede jugar? (${J.sel.length})</label><p class="muted" style="margin:0 0 6px">4 jugadores = 1 partido · 8 = 2 partidos. Si sobra alguien, juegan primero los que menos han jugado este mes.</p><div class="emojis">${act.map(p=>`<button type="button" class="${J.sel.includes(p.id)?"on":""}" style="font-size:13px;font-weight:700" onclick="jKeep();jToggle('${p.id}')">${esc(p.emoji+" "+p.name)}</button>`).join("")}</div>
     <label style="display:flex;gap:8px;align-items:center;text-transform:none;font-size:14px;color:var(--ink)"><input type="checkbox" style="width:auto" ${J.balanced?"checked":""} onchange="jKeep();J.balanced=this.checked;J.plan=null;drawJornada()"> Parejas equilibradas según el ranking (el mejor con el peor)</label>`;
   }
-  h+=`<div class="actions" style="justify-content:center"><button class="btn" onclick="jKeep();jGenerate()">${J.plan?"🔄 Volver a sortear":"🎲 Montar partido"}</button></div>`;
+  h+=`<div class="actions" style="justify-content:center"><button class="btn" onclick="jKeep();jGenerate()">${J.plan?"🔄 Volver a sortear":"🎲 Montar partidos"}</button></div>`;
   if(J.plan){
     if(J.plan.error)h+=`<div class="banner">${esc(J.plan.error)}</div>`;
     else{
-      h+=`<div class="pairbox" style="background:var(--foam)"><div class="disp">El partido</div>`;
+      h+=`<div class="pairbox" style="background:var(--foam)"><div class="disp">${J.plan.matches.length===1?"El partido":J.plan.matches.length+" partidos"}</div>`;
       if(J.mode==="draw")h+=`<div class="muted" style="margin:6px 0">Parejas: ${J.plan.pairs.map(p=>esc(pname(p[0])+" + "+pname(p[1]))).join(" · ")}</div>`;
-      h+=J.plan.matches.map((m,i)=>`<div style="padding:6px 0;border-top:1px solid #e4dfcf;font-size:14px"><b>${i+1}.</b> ${esc(pname(m[0][0])+" + "+pname(m[0][1]))} <span class="muted">vs</span> ${esc(pname(m[1][0])+" + "+pname(m[1][1]))}</div>`).join("");
+      h+=J.plan.matches.map((m,i)=>`<div style="padding:6px 0;border-top:1px solid #e4dfcf;font-size:14px"><b>Partido ${i+1}:</b> ${esc(pname(m[0][0])+" + "+pname(m[0][1]))} <span class="muted">vs</span> ${esc(pname(m[1][0])+" + "+pname(m[1][1]))}</div>`).join("");
       if(J.plan.rest.length)h+=`<div class="muted" style="margin-top:6px">🪑 Esta vez se quedan fuera: ${J.plan.rest.map(id=>esc(pname(id))).join(", ")}. Que vengan al tercer set.</div>`;
       h+=`</div>`;
     }
   }
-  h+=`<div class="actions"><button class="btn ghost" onclick="closeModal()">Cancelar</button><button class="btn ball" id="jSave" ${J.plan&&!J.plan.error?"":"disabled"} onclick="jKeep();jSave()">Crear partido</button></div>`;
+  h+=`<div class="actions"><button class="btn ghost" onclick="closeModal()">Cancelar</button><button class="btn ball" id="jSave" ${J.plan&&!J.plan.error?"":"disabled"} onclick="jKeep();jSave()">${J.plan&&J.plan.matches?.length>1?"Crear "+J.plan.matches.length+" partidos":"Crear partido"}</button></div>`;
   openModal(h);
 }
 function jToggle(id){const i=J.sel.indexOf(id);i>=0?J.sel.splice(i,1):J.sel.push(id);J.plan=null;drawJornada()}
@@ -614,30 +620,35 @@ function roundRobin(pairs){
   return out;
 }
 function jGenerate(){
-  let pairs=[],rest=[];
+  let pairs=[],rest=[],matches=[];
   if(J.mode==="pairs"){
     const ps=J.pairs;
-    if(ps.some(p=>!p[0]||!p[1])){J.plan={error:"Faltan jugadores: completa las dos parejas."};return drawJornada()}
-    const ids=ps.flat();if(new Set(ids).size!==ids.length){J.plan={error:"Alguien está en las dos parejas. Ni siendo de goma 🤸"};return drawJornada()}
+    if(ps.some(p=>!p[0]||!p[1])){J.plan={error:"Faltan jugadores: completa todas las parejas."};return drawJornada()}
+    const ids=ps.flat();if(new Set(ids).size!==ids.length){J.plan={error:"Alguien está repetido. Ni siendo de goma juega dos a la vez 🤸"};return drawJornada()}
     pairs=ps.map(p=>[...p]);
+    for(let i=0;i<pairs.length;i+=2)matches.push([pairs[i],pairs[i+1]]);
   }else{
     let sel=[...J.sel];
     if(sel.length<4){J.plan={error:"Con menos de 4 no hay partido. Llamad a alguien del banquillo."};return drawJornada()}
-    if(sel.length>4){
-      // juegan los 4 que menos han jugado este mes (empates al azar); el resto descansa
+    const k=Math.floor(sel.length/4),need=k*4;
+    if(sel.length>need){
+      // juegan primero los que menos han jugado este mes (empates al azar)
       const cur=mkey(todayISO());
       const n=id=>played().filter(m=>mkey(m.date)===cur&&matchPlayers(m).includes(id)).length;
       sel=shuffle(sel).sort((a,b)=>n(a)-n(b));
-      rest=sel.slice(4);sel=sel.slice(0,4);
+      rest=sel.slice(need);sel=sel.slice(0,need);
     }
     sel=shuffle(sel);
     if(J.balanced){
+      // parejas: mejor con peor; cruces entre parejas de nivel parecido
       const r=indRanking();const pos=id=>{const i=r.findIndex(x=>x.id===id);return i<0?99:i};
       const ord=[...sel].sort((a,b)=>pos(a)-pos(b)+(Math.random()-.5)*1.5);
-      pairs=[[ord[0],ord[3]],[ord[1],ord[2]]];
-    }else pairs=[[sel[0],sel[1]],[sel[2],sel[3]]];
+      while(ord.length)pairs.push([ord.shift(),ord.pop()]);
+      pairs=shuffle(pairs);
+    }else for(let i=0;i<sel.length;i+=2)pairs.push([sel[i],sel[i+1]]);
+    for(let i=0;i<pairs.length;i+=2)matches.push([pairs[i],pairs[i+1]]);
   }
-  J.plan={pairs,rest,matches:[[pairs[0],pairs[1]]]};
+  J.plan={pairs,rest,matches};
   drawJornada();
 }
 async function jSave(){
@@ -647,7 +658,7 @@ async function jSave(){
     for(let i=0;i<n;i++){const [a,b]=J.plan.matches[i];
       await db.collection("matches").add({status:"pending",date:J.date||todayISO(),time:J.time||"",place:(J.place||"").trim(),teamA:[...a],teamB:[...b],jornada:jid,order:i+1,of:n,rest:J.plan.rest,createdAt:new Date().toISOString(),createdBy:getMe()||null});
     }
-  },`🎲 La Callejada está montada. Que empiece el espectáculo`);
+  },n>1?`🎲 La Callejada: ${n} partidos montados. Que empiece el espectáculo`:`🎲 La Callejada está montada. Que empiece el espectáculo`);
 }
 function askDelete(id){
   openModal(`<h2>¿Borrar partido?</h2><p>Se borra para siempre, con resultado y todo. Como si nunca hubiera pasado (ojalá algunos).</p><div class="actions"><button class="btn ghost" onclick="closeModal()">No</button><button class="btn red" onclick="delMatch('${id}')">Sí, borrar</button></div>`);
