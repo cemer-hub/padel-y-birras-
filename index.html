@@ -245,7 +245,8 @@ function indRanking(){
   const map={};
   const ms=played().sort((a,b)=>(a.date+(a.time||"")).localeCompare(b.date+(b.time||"")));
   for(const m of ms){for(const side of["A","B"]){for(const pid of (side==="A"?m.teamA:m.teamB)||[]){if(!pid)continue;map[pid]=map[pid]||blank();addRes(map[pid],m.winner===side,m,side)}}}
-  return S.players.filter(p=>!p.retired).map(p=>({id:p.id,...finalize(map[p.id]||blank())})).sort(sortRank);
+  const {raj}=beersStats();
+  return S.players.filter(p=>!p.retired).map(p=>{const o=finalize(map[p.id]||blank());o.raj=raj[p.id]?.raj||0;o.pts-=o.raj;return{id:p.id,...o}}).sort(sortRank);
 }
 function pairKey(a){return [...a].sort().join("|")}
 function pairRanking(){
@@ -268,11 +269,27 @@ function debtsList(){
   }
   return out.sort((a,b)=>b.month.localeCompare(a.month));
 }
+function beerOf(m){
+  const b=m.beer||{};
+  if(!b.done)return null;
+  const people=b.people||{};
+  const total=Object.values(people).reduce((a,p)=>a+(p.stay?(+p.n||0):0),0);
+  return{...b,people,total,payers:b.payers||[],importe:+b.importe||0};
+}
+function rajados(m){const b=beerOf(m);if(!b)return[];return matchPlayers(m).filter(id=>b.people[id]&&!b.people[id].stay)}
 function beersStats(){
-  let total=0;const payers={};
-  for(const m of played()){total+=+(m.beer?.cervezas||0);for(const pid of (m.beer?.payers||[]))payers[pid]=(payers[pid]||0)+1}
-  for(const d of debtsList())if(d.paid)payers[d.pid]=(payers[d.pid]||0)+1;
-  return{total,payers};
+  let total=0;const drink={},pay={},raj={};
+  const add=(o,id,k,v)=>{o[id]=o[id]||{beers:0,ses:0,eur:0,rondas:0,raj:0};o[id][k]+=v};
+  for(const m of S.matches){
+    if(m.beer&&!m.beer.done&&m.beer.cervezas){total+=+m.beer.cervezas;for(const id of m.beer.payers||[])add(pay,id,"rondas",1);continue}
+    const b=beerOf(m);if(!b)continue;
+    total+=b.total;
+    for(const [id,p] of Object.entries(b.people)){if(p.stay){add(drink,id,"beers",+p.n||0);add(drink,id,"ses",1)}}
+    for(const id of rajados(m))add(raj,id,"raj",1);
+    for(const id of b.payers){add(pay,id,"rondas",1);if(b.importe)add(pay,id,"eur",b.importe/b.payers.length)}
+  }
+  for(const d of debtsList())if(d.paid)add(pay,d.pid,"rondas",1);
+  return{total,drink,pay,raj};
 }
 
 /* ---------- render ---------- */
@@ -300,12 +317,13 @@ function matchCard(m){
   const pend=m.status!=="played";
   const free=[...(m.teamA||[null,null]),...(m.teamB||[null,null])].filter(x=>!x).length;
   const me=getMe();const amIn=matchPlayers(m).includes(me);
-  let h=`<div class="card match"><div class="row" style="justify-content:space-between"><div><span class="tag ${pend?"pend":"done"}">${pend?"Por jugar":"Jugado"}</span> ${m.jornada?`<span class="tag">🎲 La Callejada · ${esc(m.order)}/${esc(m.of)}</span> `:""}<span class="muted">${esc(fdate(m.date,m.time))}${m.place?" · 📍 "+esc(m.place):""}</span></div></div>`;
-  if(m.rest&&m.order===1)h+=`<div class="muted" style="margin-top:6px">🪑 Descansa${m.rest.length>1?"n":""}: ${m.rest.map(id=>esc(pname(id))).join(", ")}. Le toca pedir la primera ronda.</div>`;
+  let h=`<div class="card match"><div class="row" style="justify-content:space-between"><div><span class="tag ${pend?"pend":"done"}">${pend?"Por jugar":"Jugado"}</span> ${m.jornada?`<span class="tag">🎲 La Callejada${m.of>1?" · "+esc(m.order)+"/"+esc(m.of):""}</span> `:""}<span class="muted">${esc(fdate(m.date,m.time))}${m.place?" · 📍 "+esc(m.place):""}</span></div></div>`;
+  const bb=beerOf(m);
+  if(bb){const r=rajados(m);h+=`<div class="muted" style="text-align:center;margin-top:6px">🍻 ${bb.bar?esc(bb.bar)+" · ":""}${bb.total} birras${bb.importe?" · "+eur(bb.importe):""}${bb.payers.length?" · paga "+bb.payers.map(id=>esc(pname(id))).join(" y "):""}${r.length?`<br>🏃 Se rajó: ${r.map(id=>esc(pname(id))).join(", ")} (−1 pt)`:""}</div>`}
+  if(m.rest&&m.order===1)h+=`<div class="muted" style="margin-top:6px">🪑 Se quedan fuera: ${m.rest.map(id=>esc(pname(id))).join(", ")}. Que vengan al tercer set.</div>`;
   h+=`<div class="teams">${teamHTML(m.teamA,"",m.winner==="A")}<div class="vs">VS</div>${teamHTML(m.teamB,"r",m.winner==="B")}</div>`;
   if(!pend){
-    h+=`<div class="score">${(m.sets||[]).map((s,i)=>`<div class="set"><small>SET ${i+1}</small>${esc(s[0])}-${esc(s[1])}</div>`).join("")}<div class="set third"><small>${(m.sets||[]).length>=3?"SET 4":"3er SET"}</small>🍺${m.beer?.cervezas?" ×"+esc(m.beer.cervezas):""}</div></div>`;
-    if(m.beer&&(m.beer.bar||(m.beer.payers||[]).length))h+=`<div class="muted" style="text-align:center;margin-top:4px">${m.beer.bar?"🍻 "+esc(m.beer.bar):""}${(m.beer.payers||[]).length?" · invita "+m.beer.payers.map(id=>esc(pname(id))).join(" y "):""}</div>`;
+    h+=`<div class="score">${(m.sets||[]).map((s,i)=>`<div class="set"><small>SET ${i+1}</small>${esc(s[0])}-${esc(s[1])}</div>`).join("")}<div class="set third"><small>${(m.sets||[]).length>=3?"SET 4":"3er SET"}</small>🍺${beerOf(m)?" ×"+beerOf(m).total:(m.beer?.cervezas?" ×"+esc(m.beer.cervezas):"")}</div></div>`;
     if(m.photoId||m.photoDoc)h+=`<img class="photo" alt="Foto del partido" data-photo-id="${esc(m.photoId||"")}" data-photo-doc="${esc(m.photoDoc||"")}">`;
     if(m.chronicle)h+=`<div class="chron">“${esc(m.chronicle)}”</div>`;
   }
@@ -338,7 +356,7 @@ function vRanking(){
   if(S.rankMode==="ind"){
     const r=indRanking();
     h+=`<table><tr><th>#</th><th>Jugador</th><th>PJ</th><th>V</th><th>%</th><th>±Sets</th><th>Pts</th></tr>`;
-    h+=r.map((x,i)=>`<tr class="${i===0&&x.pj?"top1":""} ${i===r.length-1&&r.length>2&&x.pj?"last":""}"><td class="pos">${i===0&&x.pj?"👑":i+1}</td><td>${esc(pav(x.id))} <b>${esc(pname(x.id))}</b><div class="muted">${formHTML(x.form)||"sin estrenar"}</div></td><td>${x.pj}</td><td>${x.pg}</td><td>${x.pct}</td><td>${x.sf-x.sc>0?"+":""}${x.sf-x.sc}</td><td><span class="pts">${x.pts}</span></td></tr>`).join("");
+    h+=r.map((x,i)=>`<tr class="${i===0&&x.pj?"top1":""} ${i===r.length-1&&r.length>2&&x.pj?"last":""}"><td class="pos">${i===0&&x.pj?"👑":i+1}</td><td>${esc(pav(x.id))} <b>${esc(pname(x.id))}</b><div class="muted">${formHTML(x.form)||"sin estrenar"}${x.raj?` · 🏃 −${x.raj}`:""}</div></td><td>${x.pj}</td><td>${x.pg}</td><td>${x.pct}</td><td>${x.sf-x.sc>0?"+":""}${x.sf-x.sc}</td><td><span class="pts">${x.pts}</span></td></tr>`).join("");
     h+=`</table>`;
   }else{
     const r=pairRanking();
@@ -349,7 +367,7 @@ function vRanking(){
       h+=`</table>`;
     }
   }
-  h+=`<p class="muted" style="margin-top:10px">Victoria 3 pts · Derrota 1 pt (por presentarte) · Desempate: sets y juegos. El tercer set lo ganamos todos 🍺</p></div>`;
+  h+=`<p class="muted" style="margin-top:10px">Victoria 3 pts · Derrota 1 pt (por presentarte) · 🏃 −1 pt si juegas y no te quedas al tercer set · Desempate: sets y juegos.</p></div>`;
   h+=`<div class="card"><h2>Premios de la casa</h2><div class="awards">${awards().map(a=>`<div class="award"><div class="t">${a.t}</div><div class="n">${a.n}</div><div class="d">${a.d}</div></div>`).join("")}</div></div>`;
   return h;
 }
@@ -361,24 +379,54 @@ function awards(){
   const mp=[...r].sort((a,b)=>b.pj-a.pj)[0];out.push({t:"🔋 Duracell",n:esc(pav(mp.id)+" "+pname(mp.id)),d:mp.pj+" partidos jugados"});
   const st=[...r].sort((a,b)=>b.streak-a.streak)[0];if(st.streak>=2)out.push({t:"🔥 En racha",n:esc(pav(st.id)+" "+pname(st.id)),d:st.streak+" victorias seguidas"});
   const cold=[...r].sort((a,b)=>a.streak-b.streak)[0];if(cold.streak<=-2)out.push({t:"🧊 Pájara",n:esc(pav(cold.id)+" "+pname(cold.id)),d:-cold.streak+" derrotas seguidas"});
-  const {payers}=beersStats();const bp=Object.entries(payers).sort((a,b)=>b[1]-a[1])[0];if(bp)out.push({t:"🍺 Mecenas",n:esc(pav(bp[0])+" "+pname(bp[0])),d:bp[1]+" rondas pagadas"});
+  const bs=beersStats();
+  const bp=Object.entries(bs.pay).sort((a,b)=>b[1].eur-a[1].eur||b[1].rondas-a[1].rondas)[0];if(bp)out.push({t:"💸 Mecenas",n:esc(pav(bp[0])+" "+pname(bp[0])),d:bp[1].eur?eur(bp[1].eur)+" pagados":bp[1].rondas+" rondas pagadas"});
+  const bd=Object.entries(bs.drink).sort((a,b)=>b[1].beers-a[1].beers)[0];if(bd&&bd[1].beers)out.push({t:"🧽 La Esponja",n:esc(pav(bd[0])+" "+pname(bd[0])),d:bd[1].beers+" birras"});
+  const br=Object.entries(bs.raj).sort((a,b)=>b[1].raj-a[1].raj)[0];if(br)out.push({t:"🏃 Cenicienta",n:esc(pav(br[0])+" "+pname(br[0])),d:"Se ha rajado "+br[1].raj+" ve"+(br[1].raj>1?"ces":"z")});
   const pr=pairRanking()[0];if(pr)out.push({t:"💞 Pareja de oro",n:pr.ids.map(id=>esc(pname(id))).join(" + "),d:pr.pg+" victorias juntos"});
   const ghost=S.players.filter(p=>!p.retired).map(p=>({p,s:playerStatus(p)})).sort((a,b)=>b.s.d-a.s.d)[0];if(ghost&&ghost.s.d>14)out.push({t:"👻 Fantasma",n:esc(ghost.p.emoji+" "+ghost.p.name),d:ghost.s.d+" días sin pisar pista"});
   return out;
 }
+function eur(n){return (Math.round(n*100)/100).toLocaleString("es-ES",{style:"currency",currency:"EUR"})}
+function beerCard(m){
+  const b=beerOf(m);const today=m.date===todayISO();
+  let h=`<div class="card"><div class="row" style="justify-content:space-between"><div><span class="tag ${b?"done":"warn"}">${b?"🍻 Apuntado":"🍺 Por apuntar"}</span> <span class="muted">${today?"Hoy":esc(fdate(m.date))}${m.time?" · "+esc(m.time):""}${m.place?" · 📍 "+esc(m.place):""}</span></div></div>`;
+  h+=`<div style="margin-top:10px">`;
+  for(const id of matchPlayers(m)){
+    const p=b?.people[id];
+    h+=`<div class="debt"><div class="av">${esc(pav(id))}</div><div class="info"><b>${esc(pname(id))}</b><div class="muted">${!b?"¿Se queda?":p?.stay?`🍺 ${+p.n||0} birra${(+p.n||0)===1?"":"s"}`:"🏃 Se rajó · −1 pt"}</div></div></div>`;
+  }
+  if(b)for(const id of Object.keys(b.people).filter(id=>!matchPlayers(m).includes(id)&&b.people[id].stay))h+=`<div class="debt"><div class="av">${esc(pav(id))}</div><div class="info"><b>${esc(pname(id))}</b> <span class="tag">se apuntó</span><div class="muted">🍺 ${+b.people[id].n||0} birras</div></div></div>`;
+  h+=`</div>`;
+  if(b)h+=`<div class="chron" style="font-style:normal"><b>${b.total} birras</b>${b.importe?" · "+eur(b.importe):""}${b.payers.length?" · paga "+b.payers.map(id=>esc(pname(id))).join(" y "):""}${b.bar?" · "+esc(b.bar):""}</div>`;
+  if(S.canWrite)h+=`<div class="row" style="margin-top:10px;justify-content:flex-end"><button class="btn sm ${b?"ghost":"beer"}" onclick="openBeer('${m.id}')">${b?"✏️ Editar tercer set":"🍻 Apuntar tercer set"}</button></div>`;
+  return h+`</div>`;
+}
+function rankTable(rows,cols,empty){
+  if(!rows.length)return `<p>${empty}</p>`;
+  return `<table><tr><th>#</th><th>${cols[0]}</th>${cols.slice(1).map(c=>`<th>${c}</th>`).join("")}</tr>${rows.map((r,i)=>`<tr class="${i===0?"top1":""}"><td class="pos">${i===0?r.icon:i+1}</td><td>${esc(pav(r.id)+" "+pname(r.id))}</td>${r.vals.map((v,j)=>`<td>${j===r.vals.length-1?`<span class="pts">${v}</span>`:v}</td>`).join("")}</tr>`).join("")}</table>`;
+}
 function vCervezas(){
-  const {total,payers}=beersStats();const debts=debtsList();const pending=debts.filter(d=>!d.paid);
-  let h=`<div class="beerhero"><div class="disp" style="font-size:13px">Tercer set · cervezas caídas</div><div class="num">${total}</div><div style="font-weight:700">${total?pick(["Hidratación profesional.","Esto es deporte de élite.","El fisio no lo aprobaría.","Isotónico de cebada."]):"Ni una. ¿Esto es pádel o un retiro espiritual?"}</div></div>`;
+  const {total,drink,pay}=beersStats();const debts=debtsList();const pending=debts.filter(d=>!d.paid);
+  const today=todayISO();
+  const recent=S.matches.filter(m=>m.date<=today&&daysSince(m.date)<=7&&matchPlayers(m).length).sort((a,b)=>(b.date+(b.time||"")).localeCompare(a.date+(a.time||"")));
+  let h=`<div class="beerhero"><div class="disp" style="font-size:13px">Tercer set · birras caídas</div><div class="num">${total}</div><div style="font-weight:700">${total?pick(["Hidratación profesional.","Esto es deporte de élite.","El fisio no lo aprobaría.","Isotónico de cebada."]):"Ni una. ¿Esto es pádel o un retiro espiritual?"}</div></div>`;
+  const todays=recent.filter(m=>m.date===today),others=recent.filter(m=>m.date!==today);
+  h+=`<h2 style="color:var(--line);margin:18px 4px 0;font-size:16px">Tercer set de hoy</h2>`;
+  h+=todays.length?todays.map(beerCard).join(""):`<div class="empty" style="padding:14px"><div class="e">🫗</div>Hoy no hay partido. Barra cerrada.</div>`;
+  const toDo=others.filter(m=>!beerOf(m));
+  if(toDo.length)h+=`<h2 style="color:var(--line);margin:18px 4px 0;font-size:16px">Sin apuntar (últimos 7 días)</h2>`+toDo.map(beerCard).join("");
+  // ranking bebedor
+  const dr=Object.entries(drink).map(([id,o])=>({id,icon:"🍺",o,vals:[o.ses,o.ses?(o.beers/o.ses).toFixed(1).replace(".",","):"0",o.beers]})).sort((a,b)=>b.o.beers-a.o.beers||b.o.ses-a.o.ses);
+  h+=`<div class="card"><h2>🍺 Ranking bebedor</h2>${rankTable(dr,["Bebedor","Sesiones","Media","Birras"],"Nadie ha bebido aún. Esto parece un retiro espiritual.")}</div>`;
+  const pr=Object.entries(pay).map(([id,o])=>({id,icon:"💸",o,vals:[o.rondas,eur(o.eur)]})).sort((a,b)=>b.o.eur-a.o.eur||b.o.rondas-a.o.rondas);
+  h+=`<div class="card"><h2>💸 Ranking pagador</h2><p class="muted">Lo pagado en el tercer set (si pagan varios, se reparte a partes iguales) más las rondas de deuda saldadas.</p>${rankTable(pr,["Pagador","Rondas","Pagado"],"Aquí no ha invitado nadie. Agarrados.")}</div>`;
   h+=`<div class="card"><h2>Rondas que se deben</h2><p class="muted">Quien no juegue en todo un mes, paga ronda. El mes en que te das de alta no cuenta.</p>`;
   if(!debts.length)h+=`<p>Nadie debe nada. Sospechoso. 🤨</p>`;
   for(const d of debts){
     h+=`<div class="debt ${d.paid?"paid":""}"><div class="av">${esc(pav(d.pid))}</div><div class="info"><b>${esc(pname(d.pid))}</b><div class="muted">No jugó en ${esc(mname(d.month))}${d.paid?" · pagada ✅":""}</div></div>${S.canWrite?(d.paid?`<button class="btn sm ghost" onclick="payDebt('${d.id}',false)">Deshacer</button>`:`<button class="btn sm beer" onclick="payDebt('${d.id}',true)">🍺 Pagada</button>`):""}</div>`;
   }
-  h+=`</div>`;
-  const pr=Object.entries(payers).sort((a,b)=>b[1]-a[1]);
-  h+=`<div class="card"><h2>Ranking cervecero</h2><p class="muted">Rondas pagadas (en el tercer set + deudas saldadas).</p>`;
-  h+=pr.length?`<table><tr><th>#</th><th>Mecenas</th><th>Rondas</th></tr>${pr.map(([id,n],i)=>`<tr><td class="pos">${i===0?"🍺":i+1}</td><td>${esc(pav(id)+" "+pname(id))}</td><td><span class="pts">${n}</span></td></tr>`).join("")}</table>`:`<p>Aquí aún no ha invitado nadie. Agarrados.</p>`;
-  if(pending.length)h+=`<p class="muted" style="margin-top:8px">Deudas pendientes: ${pending.length} ronda${pending.length>1?"s":""}.</p>`;
+  if(pending.length)h+=`<p class="muted" style="margin-top:8px">Pendientes: ${pending.length} ronda${pending.length>1?"s":""}.</p>`;
   return h+`</div>`;
 }
 function vGrupo(){
@@ -395,6 +443,7 @@ function vGrupo(){
   h+=`<div class="card"><h2>Reglamento</h2>
   <div class="rule"><div class="i">🎾</div><div>Partido ganado: 3 puntos. Perdido: 1 punto, por lo menos te presentaste.</div></div>
   <div class="rule"><div class="i">🍺</div><div>Siempre hay tercer set (o cuarto): cervezas. Es obligatorio y no puntúa, porque lo ganamos todos.</div></div>
+  <div class="rule"><div class="i">🏃</div><div>Si juegas y no te quedas al tercer set, −1 punto en la clasificación.</div></div>
   <div class="rule"><div class="i">💸</div><div>Quien pase un mes entero sin jugar debe una ronda al grupo.</div></div>
   <div class="rule"><div class="i">🚪</div><div>Quien pase tres meses sin jugar queda fuera del grupo. Su plaza pasa a los del banquillo.</div></div>
   <div class="rule"><div class="i">⚖️</div><div>Cualquier discusión sobre si la bola tocó la línea se resuelve en el tercer set.</div></div></div>`;
@@ -472,6 +521,46 @@ async function saveMatch(id){
   const data={...base,date,time:$("#mTime").value||"",place:$("#mPlace").value.trim(),...t};delete data.id;
   await write(()=>id?db.doc("matches/"+id).set(data):db.collection("matches").add(data),id?"Partido actualizado":pick(["Partido en el calendario 📅","Hecho. Id calentando el codo.","Apuntado. Nada de excusas."]));
 }
+/* ---------- tercer set ---------- */
+const B={};
+function openBeer(mid){
+  const m=S.matches.find(x=>x.id===mid);const b=beerOf(m);
+  B.mid=mid;B.people={};B.payers=[...(b?.payers||[])];B.importe=b?.importe||"";B.bar=b?.bar||"";
+  for(const id of matchPlayers(m))B.people[id]=b?.people[id]?{...b.people[id]}:{stay:true,n:0};
+  if(b)for(const [id,p] of Object.entries(b.people))if(!B.people[id])B.people[id]={...p};
+  drawBeer();
+}
+function bKeep(){if($("#bImp")){B.importe=$("#bImp").value;B.bar=$("#bBar").value}}
+function bSet(id,k,v){bKeep();const p=B.people[id];if(k==="n")p.n=Math.max(0,(+p.n||0)+v);else{p.stay=v;if(!v){p.n=0;B.payers=B.payers.filter(x=>x!==id)}}drawBeer()}
+function bExtra(id){bKeep();if(B.people[id])delete B.people[id];else B.people[id]={stay:true,n:0};B.payers=B.payers.filter(x=>B.people[x]?.stay);drawBeer()}
+function bPay(id){bKeep();B.payers=B.payers.includes(id)?B.payers.filter(x=>x!==id):[...B.payers,id];drawBeer()}
+function drawBeer(){
+  const m=S.matches.find(x=>x.id===B.mid);const mp=matchPlayers(m);
+  const total=Object.values(B.people).reduce((a,p)=>a+(p.stay?(+p.n||0):0),0);
+  const row=(id,extra)=>{const p=B.people[id];return `<div class="debt"><div class="av">${esc(pav(id))}</div><div class="info"><b>${esc(pname(id))}</b>${extra?' <span class="tag">se apunta</span>':""}
+    ${p.stay?`<div class="row" style="margin-top:4px;gap:6px"><button class="btn sm ghost" onclick="bSet('${id}','n',-1)">−</button><span class="disp" style="min-width:34px;text-align:center">${+p.n||0}</span><button class="btn sm ball" onclick="bSet('${id}','n',1)">+ 🍺</button></div>`:`<div class="muted">🏃 Se raja · −1 pt en la clasificación</div>`}</div>
+    ${extra?`<button class="btn sm ghost" onclick="bExtra('${id}')">✕</button>`:p.stay?`<button class="btn sm ghost" onclick="bSet('${id}','stay',false)">🏃 Se raja</button>`:`<button class="btn sm beer" onclick="bSet('${id}','stay',true)">🍺 Se queda</button>`}</div>`};
+  const others=S.players.filter(p=>!p.retired&&!mp.includes(p.id));
+  const present=Object.keys(B.people).filter(id=>B.people[id].stay);
+  openModal(`<h2>🍻 Tercer set</h2><p class="muted" style="margin-top:-6px">${esc(fdate(m.date,m.time))}${m.place?" · "+esc(m.place):""}</p>
+  <label>Los del partido</label>${mp.map(id=>row(id,false)).join("")}
+  ${Object.keys(B.people).filter(id=>!mp.includes(id)).map(id=>row(id,true)).join("")}
+  ${others.length?`<label>¿Se apunta alguien más?</label><div class="emojis">${others.filter(p=>!B.people[p.id]).map(p=>`<button type="button" style="font-size:13px;font-weight:700" onclick="bExtra('${p.id}')">${esc(p.emoji+" "+p.name)}</button>`).join("")||'<span class="muted">Ya están todos</span>'}</div>`:""}
+  <div class="pairbox" style="background:var(--foam);margin-top:14px"><div class="row" style="justify-content:space-between"><span class="disp">Total</span><span class="disp" style="font-size:22px">${total} 🍺</span></div>
+    <div class="grid2"><div><label>Importe (€)</label><input id="bImp" inputmode="decimal" value="${esc(B.importe)}" placeholder="0,00"></div><div><label>Bar</label><input id="bBar" value="${esc(B.bar)}" placeholder="El de siempre"></div></div>
+    <label>¿Quién paga?</label><div class="emojis">${present.map(id=>`<button type="button" class="${B.payers.includes(id)?"on":""}" style="font-size:13px;font-weight:700" onclick="bPay('${id}')">${esc(pav(id)+" "+pname(id))}</button>`).join("")||'<span class="muted">Nadie se ha quedado 😢</span>'}</div>
+    ${B.payers.length>1?`<div class="muted" style="margin-top:6px">Se reparte a partes iguales entre ${B.payers.length}.</div>`:""}
+  </div>
+  <div class="actions"><button class="btn ghost" onclick="closeModal()">Cancelar</button><button class="btn ball" id="bSave" onclick="saveBeer()">Guardar</button></div>`);
+}
+async function saveBeer(){
+  bKeep();
+  const imp=parseFloat(String(B.importe).replace(",","."))||0;
+  const people={};for(const [id,p] of Object.entries(B.people))people[id]={stay:!!p.stay,n:p.stay?(+p.n||0):0};
+  const beer={done:true,people,payers:B.payers.filter(id=>people[id]?.stay),importe:Math.max(0,Math.round(imp*100)/100),bar:(B.bar||"").trim()};
+  const raj=Object.entries(people).filter(([id,p])=>!p.stay).map(([id])=>pname(id));
+  await write(()=>db.doc("matches/"+B.mid).update({beer}),raj.length?`🏃 ${raj.join(" y ")} se raja${raj.length>1?"n":""}: −1 punto. El resto, salud 🍻`:pick(["🍻 Tercer set apuntado. Salud","Apuntado. El hígado también entrena","🍺 Hidratación registrada"]));
+}
 /* ---------- jornada automática ---------- */
 const J={mode:"pairs",pairs:[],sel:[],balanced:true,plan:null};
 function openJornada(){
@@ -484,31 +573,30 @@ function jKeep(){
   if(J.mode==="pairs")J.pairs=J.pairs.map((p,i)=>[$("#jp"+i+"a")?.value||"",$("#jp"+i+"b")?.value||""]);
 }
 function drawJornada(){
-  let h=`<h2>🎲 La Callejada</h2><p class="muted" style="margin-top:-6px">Dinos quién juega y la app monta los partidos.</p>
+  let h=`<h2>🎲 La Callejada</h2><p class="muted" style="margin-top:-6px">Dinos quién juega y la app monta el partido.</p>
   <div class="grid2"><div><label>Día</label><input type="date" id="jDate" value="${esc(J.date)}"></div><div><label>Hora</label><input type="time" id="jTime" value="${esc(J.time)}"></div></div>
   <label>Dónde</label><input id="jPlace" value="${esc(J.place)}" placeholder="Club, pista…">
   <label>¿Cómo van las parejas?</label>
   <div class="seg"><button class="${J.mode==="pairs"?"on":""}" onclick="jKeep();J.mode='pairs';J.plan=null;drawJornada()">Ya las tenemos</button><button class="${J.mode==="draw"?"on":""}" onclick="jKeep();J.mode='draw';J.plan=null;drawJornada()">Que las sortee la app</button></div>`;
   if(J.mode==="pairs"){
-    h+=J.pairs.map((p,i)=>`<div class="pairbox"><div class="row" style="justify-content:space-between"><span class="disp">Pareja ${i+1}</span>${J.pairs.length>2?`<button class="btn sm ghost" onclick="jKeep();J.pairs.splice(${i},1);J.plan=null;drawJornada()">✕</button>`:""}</div><div class="grid2" style="margin-top:6px"><select id="jp${i}a">${playerOpts(p[0])}</select><select id="jp${i}b">${playerOpts(p[1])}</select></div></div>`).join("");
-    h+=`<button class="btn sm ghost" style="margin-top:8px" onclick="jKeep();J.pairs.push(['','']);J.plan=null;drawJornada()">+ Añadir pareja</button>`;
+    h+=J.pairs.map((p,i)=>`<div class="pairbox"><div class="row" style="justify-content:space-between"><span class="disp">Pareja ${i===0?"A":"B"}</span></div><div class="grid2" style="margin-top:6px"><select id="jp${i}a">${playerOpts(p[0])}</select><select id="jp${i}b">${playerOpts(p[1])}</select></div></div>`).join("");
   }else{
     const act=S.players.filter(p=>!p.retired).sort((a,b)=>a.name.localeCompare(b.name));
-    h+=`<label>¿Quién viene? (${J.sel.length})</label><div class="emojis">${act.map(p=>`<button type="button" class="${J.sel.includes(p.id)?"on":""}" style="font-size:13px;font-weight:700" onclick="jKeep();jToggle('${p.id}')">${esc(p.emoji+" "+p.name)}</button>`).join("")}</div>
+    h+=`<label>¿Quién puede jugar? (${J.sel.length})</label><p class="muted" style="margin:0 0 6px">Si marcas más de 4, la app elige a 4: primero los que menos han jugado este mes.</p><div class="emojis">${act.map(p=>`<button type="button" class="${J.sel.includes(p.id)?"on":""}" style="font-size:13px;font-weight:700" onclick="jKeep();jToggle('${p.id}')">${esc(p.emoji+" "+p.name)}</button>`).join("")}</div>
     <label style="display:flex;gap:8px;align-items:center;text-transform:none;font-size:14px;color:var(--ink)"><input type="checkbox" style="width:auto" ${J.balanced?"checked":""} onchange="jKeep();J.balanced=this.checked;J.plan=null;drawJornada()"> Parejas equilibradas según el ranking (el mejor con el peor)</label>`;
   }
-  h+=`<div class="actions" style="justify-content:center"><button class="btn" onclick="jKeep();jGenerate()">${J.plan?"🔄 Volver a sortear":"🎲 Generar partidos"}</button></div>`;
+  h+=`<div class="actions" style="justify-content:center"><button class="btn" onclick="jKeep();jGenerate()">${J.plan?"🔄 Volver a sortear":"🎲 Montar partido"}</button></div>`;
   if(J.plan){
     if(J.plan.error)h+=`<div class="banner">${esc(J.plan.error)}</div>`;
     else{
-      h+=`<div class="pairbox" style="background:var(--foam)"><div class="disp">${J.plan.matches.length} partido${J.plan.matches.length>1?"s":""}</div>`;
+      h+=`<div class="pairbox" style="background:var(--foam)"><div class="disp">El partido</div>`;
       if(J.mode==="draw")h+=`<div class="muted" style="margin:6px 0">Parejas: ${J.plan.pairs.map(p=>esc(pname(p[0])+" + "+pname(p[1]))).join(" · ")}</div>`;
       h+=J.plan.matches.map((m,i)=>`<div style="padding:6px 0;border-top:1px solid #e4dfcf;font-size:14px"><b>${i+1}.</b> ${esc(pname(m[0][0])+" + "+pname(m[0][1]))} <span class="muted">vs</span> ${esc(pname(m[1][0])+" + "+pname(m[1][1]))}</div>`).join("");
-      if(J.plan.rest.length)h+=`<div class="muted" style="margin-top:6px">🪑 Descansa: ${J.plan.rest.map(id=>esc(pname(id))).join(", ")} (y paga la primera ronda)</div>`;
+      if(J.plan.rest.length)h+=`<div class="muted" style="margin-top:6px">🪑 Esta vez se quedan fuera: ${J.plan.rest.map(id=>esc(pname(id))).join(", ")}. Que vengan al tercer set.</div>`;
       h+=`</div>`;
     }
   }
-  h+=`<div class="actions"><button class="btn ghost" onclick="closeModal()">Cancelar</button><button class="btn ball" id="jSave" ${J.plan&&!J.plan.error?"":"disabled"} onclick="jKeep();jSave()">Crear partidos</button></div>`;
+  h+=`<div class="actions"><button class="btn ghost" onclick="closeModal()">Cancelar</button><button class="btn ball" id="jSave" ${J.plan&&!J.plan.error?"":"disabled"} onclick="jKeep();jSave()">Crear partido</button></div>`;
   openModal(h);
 }
 function jToggle(id){const i=J.sel.indexOf(id);i>=0?J.sel.splice(i,1):J.sel.push(id);J.plan=null;drawJornada()}
@@ -527,28 +615,28 @@ function roundRobin(pairs){
 function jGenerate(){
   let pairs=[],rest=[];
   if(J.mode==="pairs"){
-    const ps=J.pairs.filter(p=>p[0]||p[1]);
-    if(ps.some(p=>!p[0]||!p[1])){J.plan={error:"Hay alguna pareja coja: completa los dos huecos."};return drawJornada()}
-    const ids=ps.flat();if(new Set(ids).size!==ids.length){J.plan={error:"Alguien está en dos parejas. Ni siendo de goma 🤸"};return drawJornada()}
-    if(ps.length<2){J.plan={error:"Hacen falta al menos dos parejas."};return drawJornada()}
-    pairs=ps;
+    const ps=J.pairs;
+    if(ps.some(p=>!p[0]||!p[1])){J.plan={error:"Faltan jugadores: completa las dos parejas."};return drawJornada()}
+    const ids=ps.flat();if(new Set(ids).size!==ids.length){J.plan={error:"Alguien está en las dos parejas. Ni siendo de goma 🤸"};return drawJornada()}
+    pairs=ps.map(p=>[...p]);
   }else{
     let sel=[...J.sel];
     if(sel.length<4){J.plan={error:"Con menos de 4 no hay partido. Llamad a alguien del banquillo."};return drawJornada()}
-    sel=shuffle(sel);
-    if(sel.length%2){
-      // descansa quien más ha jugado últimamente (o al azar)
-      const r=indRanking();const pj=id=>(r.find(x=>x.id===id)||{pj:0}).pj;
-      sel.sort((a,b)=>pj(b)-pj(a));rest=[sel.shift()];sel=shuffle(sel);
+    if(sel.length>4){
+      // juegan los 4 que menos han jugado este mes (empates al azar); el resto descansa
+      const cur=mkey(todayISO());
+      const n=id=>played().filter(m=>mkey(m.date)===cur&&matchPlayers(m).includes(id)).length;
+      sel=shuffle(sel).sort((a,b)=>n(a)-n(b));
+      rest=sel.slice(4);sel=sel.slice(0,4);
     }
+    sel=shuffle(sel);
     if(J.balanced){
       const r=indRanking();const pos=id=>{const i=r.findIndex(x=>x.id===id);return i<0?99:i};
-      // con algo de azar entre empatados
       const ord=[...sel].sort((a,b)=>pos(a)-pos(b)+(Math.random()-.5)*1.5);
-      while(ord.length)pairs.push([ord.shift(),ord.pop()]);
-    }else{for(let i=0;i<sel.length;i+=2)pairs.push([sel[i],sel[i+1]])}
+      pairs=[[ord[0],ord[3]],[ord[1],ord[2]]];
+    }else pairs=[[sel[0],sel[1]],[sel[2],sel[3]]];
   }
-  J.plan={pairs,rest,matches:roundRobin(pairs)};
+  J.plan={pairs,rest,matches:[[pairs[0],pairs[1]]]};
   drawJornada();
 }
 async function jSave(){
@@ -558,7 +646,7 @@ async function jSave(){
     for(let i=0;i<n;i++){const [a,b]=J.plan.matches[i];
       await db.collection("matches").add({status:"pending",date:J.date||todayISO(),time:J.time||"",place:(J.place||"").trim(),teamA:[...a],teamB:[...b],jornada:jid,order:i+1,of:n,rest:J.plan.rest,createdAt:new Date().toISOString(),createdBy:getMe()||null});
     }
-  },`🎲 La Callejada está montada: ${n} partido${n>1?"s":""}. Que empiece el espectáculo`);
+  },`🎲 La Callejada está montada. Que empiece el espectáculo`);
 }
 function askDelete(id){
   openModal(`<h2>¿Borrar partido?</h2><p>Se borra para siempre, con resultado y todo. Como si nunca hubiera pasado (ojalá algunos).</p><div class="actions"><button class="btn ghost" onclick="closeModal()">No</button><button class="btn red" onclick="delMatch('${id}')">Sí, borrar</button></div>`);
@@ -592,10 +680,7 @@ function openResult(id){
   <label class="filelbl" for="photoIn">📷 <span id="photoLbl">${m?.photoId||m?.photoDoc?"Cambiar foto":"Subir foto"}</span></label>
   <input type="file" id="photoIn" accept="image/*" style="display:none" onchange="previewPhoto(this)">
   <img id="photoPrev" class="preview" style="display:none" alt="">
-  <div class="pairbox" style="background:var(--foam)"><div class="disp">El tercer set 🍻</div>
-    <div class="grid2"><div><label>Bar</label><input id="bBar" value="${esc(m?.beer?.bar||"")}" placeholder="El de siempre"></div><div><label>Cervezas</label><input id="bNum" inputmode="numeric" value="${esc(m?.beer?.cervezas||"")}" placeholder="0"></div></div>
-    <label>¿Quién invitó?</label><div class="emojis" id="payers">${S.players.filter(p=>!p.retired).map(p=>`<button type="button" class="${payers.includes(p.id)?"on":""}" data-id="${esc(p.id)}" onclick="this.classList.toggle('on')" style="font-size:13px;font-weight:700">${esc(p.emoji+" "+p.name)}</button>`).join("")}</div>
-  </div>
+  <div class="banner" style="margin-top:12px">🍻 El tercer set (birras, importe y quién paga) se apunta en la pestaña <b>Cervezas</b>.</div>
   <label>Crónica (opcional)</label><textarea id="chron" placeholder="Qué pasó, quién lloró, qué bola fue fuera…">${esc(m?.chronicle||"")}</textarea>
   <div class="actions"><button class="btn ghost" onclick="closeModal()">Cancelar</button><button class="btn ball" id="saveRes" onclick="saveResult('${m?.id||""}')">Guardar</button></div>`);
 }
@@ -634,8 +719,7 @@ async function saveResult(id){
   const btn=$("#saveRes");btn.disabled=true;btn.textContent="Guardando…";
   const m=id?S.matches.find(x=>x.id===id):null;
   const data={...(m||{createdAt:new Date().toISOString(),createdBy:getMe()||null}),...t,sets,winner:wa>wb?"A":"B",status:"played",
-    chronicle:$("#chron").value.trim(),
-    beer:{bar:$("#bBar").value.trim(),cervezas:Math.max(0,parseInt($("#bNum").value)||0),payers:[...document.querySelectorAll("#payers button.on")].map(b=>b.dataset.id)}};
+    chronicle:$("#chron").value.trim()};
   if(!m){data.date=$("#mDate").value||todayISO();data.place=$("#mPlace").value.trim();data.time=""}
   delete data.id;
   try{
