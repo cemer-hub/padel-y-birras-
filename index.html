@@ -145,7 +145,7 @@ textarea{min-height:70px;resize:vertical}
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
-import { initializeFirestore, persistentLocalCache, doc, collection, getDoc, setDoc, updateDoc, deleteDoc, addDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+import { initializeFirestore, doc, collection, getDoc, setDoc, updateDoc, deleteDoc, addDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyBvfhPaBjO0WQGkW-H8i4uLCfPAKk1E5fA",
@@ -157,9 +157,7 @@ const firebaseConfig = {
 };
 
 const app = initializeApp(firebaseConfig);
-let fs;
-try { fs = initializeFirestore(app, { ignoreUndefinedProperties: true, localCache: persistentLocalCache() }); }
-catch (e) { fs = initializeFirestore(app, { ignoreUndefinedProperties: true }); }
+const fs = initializeFirestore(app, { ignoreUndefinedProperties: true });
 const auth = getAuth(app);
 
 // Firestore no admite arrays dentro de arrays (p. ej. los sets): se codifican al guardar y se decodifican al leer
@@ -168,27 +166,29 @@ const enc = v => Array.isArray(v) ? v.map(x => Array.isArray(x) ? { __a: enc(x) 
 const dec = v => Array.isArray(v) ? v.map(x => (x && typeof x === "object" && "__a" in x) ? dec(x.__a) : dec(x))
   : (v && typeof v === "object") ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, dec(x)])) : v;
 
+const timed = p => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej({ code: "timeout" }), 12000))]);
 const snapDoc = d => ({ id: d.id, exists: d.exists(), data: () => d.exists() ? dec(d.data()) : undefined, metadata: d.metadata });
 const docRef = r => ({
   id: r.id, path: r.path,
   get: async () => snapDoc(await getDoc(r)),
-  set: data => setDoc(r, enc(data)),
-  update: data => updateDoc(r, enc(data)),
-  delete: () => deleteDoc(r),
+  set: data => timed(setDoc(r, enc(data))),
+  update: data => timed(updateDoc(r, enc(data))),
+  delete: () => timed(deleteDoc(r)),
 });
 const colRef = c => ({
   path: c.path,
   doc: id => docRef(id ? doc(c, id) : doc(c)),
-  add: async data => docRef(await addDoc(c, enc(data))),
+  add: async data => docRef(await timed(addDoc(c, enc(data)))),
   onSnapshot: (next, err) => onSnapshot(c, { includeMetadataChanges: true },
     s => next({ docs: s.docs.map(snapDoc), size: s.size, empty: s.empty, metadata: s.metadata }), err),
 });
 const dbShim = { doc: p => docRef(doc(fs, p)), collection: p => colRef(collection(fs, p)) };
 
 const ready = new Promise(res => {
-  onAuthStateChanged(auth, u => { if (u) res(true); });
+  onAuthStateChanged(auth, u => { if (u) { window.__uid = u.uid; res(true); } });
   signInAnonymously(auth).catch(e => { console.error("auth", e); window.__authErr = e?.code || String(e); res(false); });
 });
+window.__project = firebaseConfig.projectId;
 window.__padelReady(ready.then(ok => ok ? dbShim : null));
 </script>
 <script>
@@ -280,7 +280,8 @@ function render(){
   document.querySelectorAll("nav a").forEach(a=>a.classList.toggle("on",a.dataset.v===S.view));
   renderMe();
   const app=$("#app");
-  if(!S.loaded.players){app.innerHTML=`<div class="empty"><div class="e">🎾</div>${S.slow?"No llego a la base de datos todavía… revisa la conexión.":"Calentando en la pista…"}</div>`;return}
+  if(S.dbErr){app.innerHTML=`<div class="card"><h2>La base de datos no responde</h2>${dbHelp(S.dbErr)}<p class="muted">Código: ${esc(S.dbErr)}</p><button class="btn ball" onclick="location.reload()">Reintentar</button></div>`;return}
+  if(!S.loaded.players){app.innerHTML=S.slow?`<div class="card"><h2>Conectado, pero la base de datos no contesta</h2><p>El inicio de sesión ya funciona ✅. Lo que falta es <b>Firestore</b>:</p><p>En Firebase: <b>Bases de datos y almacenamiento → Firestore Database</b>. Si sale <b>“Crear base de datos”</b>, créala (modo producción, ubicación <b>eur3</b>) y deja el ID como <b>(default)</b>.</p><p>Luego, en la pestaña <b>Reglas</b>, pega las reglas y pulsa <b>Publicar</b>.</p><button class="btn ball" onclick="location.reload()">Reintentar</button></div>`:`<div class="empty"><div class="e">🎾</div>Calentando en la pista…</div>`;return}
   let h="";
   if(!S.canWrite)h+=`<div class="banner">👀 Modo grada: puedes mirar pero no apuntar nada. Pide al que montó esto que te invite como Editor.</div>`;
   h+=({partidos:vPartidos,ranking:vRanking,cervezas:vCervezas,grupo:vGrupo,candidatos:vCandidatos}[S.view]||vPartidos)();
@@ -397,6 +398,7 @@ function vGrupo(){
   <div class="rule"><div class="i">💸</div><div>Quien pase un mes entero sin jugar debe una ronda al grupo.</div></div>
   <div class="rule"><div class="i">🚪</div><div>Quien pase tres meses sin jugar queda fuera del grupo. Su plaza pasa a los del banquillo.</div></div>
   <div class="rule"><div class="i">⚖️</div><div>Cualquier discusión sobre si la bola tocó la línea se resuelve en el tercer set.</div></div></div>`;
+  h+=`<div class="card"><h2>Diagnóstico</h2><div class="muted">Servidor: ${S.online?"✅ conectado":"⚠️ sin confirmar"} · Proyecto: ${esc(window.__project||"?")} · Sesión: ${window.__uid?"✅":"❌"} · Jugadores en la base de datos: ${S.players.length}${S.lastErr?"<br>Último error: "+esc(S.lastErr):""}</div></div>`;
   const ret=S.players.filter(p=>p.retired);
   if(ret.length)h+=`<div class="card"><h2>Bajas definitivas</h2>${ret.map(p=>`<div class="pl out"><div class="av">${esc(p.emoji)}</div><div class="info"><div class="nm">${esc(p.name)}</div><div class="muted">Colgó la pala</div></div>${S.canWrite?`<button class="btn sm ghost" onclick="unretire('${p.id}')">Recuperar</button>`:""}</div>`).join("")}</div>`;
   return h;
@@ -697,12 +699,21 @@ async function write(fn,msg){
   try{await fn();closeModal();if(msg)toast(msg)}
   catch(e){
     console.error(e);
-    if(e?.code==="permission-denied"){toast("Sin permiso para guardar 🔒 Revisa las reglas de Firestore")}
-    else if(e?.code==="quota_exceeded")toast("La base de datos está llena");
-    else toast("Algo falló. Prueba otra vez");
+    const c=e?.code||e?.message||String(e);
+    S.lastErr=c+" · "+new Date().toLocaleTimeString("es-ES");
+    if(c==="permission-denied")toast("🔒 Firebase no deja guardar: revisa que las Reglas estén publicadas");
+    else if(c==="timeout")toast("⏳ El servidor no contesta: ¿está creada la base de datos Firestore (default)?");
+    else if(c==="resource-exhausted")toast("La base de datos llegó al límite gratuito de hoy");
+    else toast("No se guardó. Código: "+c);
+    render();
   }
 }
 
+function dbHelp(code){
+  if(code==="permission-denied")return `<p>Firebase rechaza el acceso: faltan las <b>reglas</b>. En <b>Firestore Database → Reglas</b>, borra lo que haya, pega el contenido de <b>firestore.rules</b> y pulsa <b>Publicar</b>.</p>`;
+  if(code==="not-found"||code==="failed-precondition")return `<p>La base de datos <b>Firestore</b> no existe todavía. En <b>Bases de datos y almacenamiento → Firestore Database → Crear base de datos</b> (modo producción, ubicación eur3, ID <b>(default)</b>).</p>`;
+  return `<p>Revisa en Firebase que <b>Firestore Database</b> esté creada y que las <b>Reglas</b> estén publicadas.</p>`;
+}
 function authHelp(code){
   const host=esc(location.hostname);
   const tips={
@@ -729,10 +740,11 @@ $("#meSel").addEventListener("change",e=>{setMe(e.target.value);const p=P(e.targ
   if(!db){clearTimeout(slow);$("#app").innerHTML=`<div class="card"><h2>Sin conexión</h2><p>No se pudo conectar con la base de datos.</p>${authHelp(window.__authErr)}</div>`;return}
   const sub=(col,key,fn)=>db.collection(col).onSnapshot(snap=>{
     fn(snap.docs.map(d=>({id:d.id,...d.data()})));
+    S.online=!snap.metadata.fromCache;
     if(!snap.metadata.fromCache){S.loaded[key]=true;if(key==="players"){clearTimeout(slow);S.slow=false}}
     else S.loaded[key]=S.loaded[key]||snap.size>0;
     render();
-  },err=>{console.error(col,err);S.loaded[key]=true;clearTimeout(slow);render()});
+  },err=>{console.error(col,err);S.dbErr=S.dbErr||err?.code||String(err);clearTimeout(slow);render()});
   sub("players","players",a=>S.players=a);
   sub("matches","matches",a=>S.matches=a);
   sub("candidates","candidates",a=>S.candidates=a);
